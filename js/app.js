@@ -6,10 +6,79 @@
 // Variável global para armazenar a fórmula atual
 let formula = '';
 
+// Função para validar entrada em tempo real
+function validarEntrada(char, formulaAtual) {
+    const ultimo = formulaAtual.slice(-1);
+    
+    // Permite NOT no início e após operadores
+    if (char === '¬' || char === '~') {
+        // Não permite NOT duplo
+        if (ultimo === '¬' || ultimo === '~') {
+            return false;
+        }
+        return true;
+    }
+    
+    // Não permite operadores consecutivos (exceto NOT)
+    if (isLogicalOperator(char) && isLogicalOperator(ultimo)) {
+        return false;
+    }
+    
+    // Não permite operador no início (exceto NOT)
+    if (isLogicalOperator(char) && formulaAtual === '') {
+        return false;
+    }
+    
+    // Não permite variáveis consecutivas sem operador
+    if ((isVariable(char) || isConstant(char)) && (isVariable(ultimo) || isConstant(ultimo))) {
+        return false;
+    }
+    
+    // Validação de parênteses
+    if (char === '(' && isVariable(ultimo)) {
+        return false;
+    }
+    
+    if (char === ')') {
+        const abertos = (formulaAtual.match(/\(/g) || []).length;
+        const fechados = (formulaAtual.match(/\)/g) || []).length;
+        if (abertos <= fechados) {
+            return false;
+        }
+        if (ultimo === '(') {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+function isLogicalOperator(char) {
+    // Exclui NOT da lista de operadores para validação geral
+    return ['∧', '∨', '⊻', '→', '↔'].includes(char);
+}
+
+function isVariable(char) {
+    return /^[A-Z]$/.test(char);
+}
+
+function isConstant(char) {
+    return ['[Verdadeiro]', '[Falso]', '1', '0'].includes(char);
+}
+
 // Função para adicionar caracteres à fórmula
 function add(char) {
-    formula += char;
+    if (validarEntrada(char, formula)) {
+        formula += char;
+        updateDisplay();
+    }
+}
+
+// Função para limpar tudo (All Clear) - como calculadora
+function clearAll() {
+    formula = '';
     updateDisplay();
+    clearResult();
 }
 
 // Função para deletar o último caractere
@@ -192,13 +261,45 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Permite usar Enter para calcular
+// Permite usar Enter para calcular e atalhos de teclado
 document.addEventListener('DOMContentLoaded', function() {
     const input = document.getElementById('formulaInput');
     if (input) {
+        // Remove o atributo readonly para permitir entrada por teclado
+        input.removeAttribute('readonly');
+        
         input.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 verificar();
+            }
+        });
+        
+        // Atalhos de teclado baseados no main.js
+        input.addEventListener('keydown', function(e) {
+            // Previne o comportamento padrão para nossas teclas especiais
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', '1', '0'].includes(e.key)) {
+                e.preventDefault();
+            }
+            
+            switch (e.key) {
+                case 'ArrowUp':
+                    add('∧');
+                    break;
+                case 'ArrowDown':
+                    add('∨');
+                    break;
+                case 'ArrowLeft':
+                    add('↔');
+                    break;
+                case 'ArrowRight':
+                    add('→');
+                    break;
+                case '1':
+                    add('[Verdadeiro]');
+                    break;
+                case '0':
+                    add('[Falso]');
+                    break;
             }
         });
     }

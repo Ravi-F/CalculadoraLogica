@@ -14,10 +14,13 @@ const TokenType = {
     NOT: 'NOT',         // ~, ¬
     AND: 'AND',         // ^, ∧
     OR: 'OR',           // v, ∨
+    XOR: 'XOR',         // ⊻
     IMPLIES: 'IMPLIES', // ->, →
     IFF: 'IFF',         // <->, ↔
     LPAREN: 'LPAREN',   // (
     RPAREN: 'RPAREN',   // )
+    TRUE: 'TRUE',       // [Verdadeiro], 1
+    FALSE: 'FALSE',     // [Falso], 0
     EOF: 'EOF'          // Fim de arquivo
 };
 
@@ -73,6 +76,35 @@ class Lexer {
                 return new Token(TokenType.ATOM, val, this.pos - 1);
             }
 
+            // Identificar constantes [Verdadeiro] e [Falso]
+            if (this.currentChar === '[') {
+                const start = this.pos;
+                while (this.currentChar !== null && this.currentChar !== ']') {
+                    this.advance();
+                }
+                if (this.currentChar === ']') {
+                    this.advance(); // consome o ]
+                    const value = this.input.substring(start, this.pos);
+                    if (value === '[Verdadeiro]' || value === '[1]') {
+                        return new Token(TokenType.TRUE, '1', start);
+                    } else if (value === '[Falso]' || value === '[0]') {
+                        return new Token(TokenType.FALSE, '0', start);
+                    }
+                    throw new Error(`Erro Léxico: Constante inválida '${value}' na posição ${start}`);
+                }
+                throw new Error(`Erro Léxico: Constante não fechada na posição ${start}`);
+            }
+
+            // Identificar valores literais 1 e 0
+            if (this.currentChar === '1') {
+                this.advance();
+                return new Token(TokenType.TRUE, '1', this.pos - 1);
+            }
+            if (this.currentChar === '0') {
+                this.advance();
+                return new Token(TokenType.FALSE, '0', this.pos - 1);
+            }
+
             // Identificar Símbolos
             switch (this.currentChar) {
                 case '~':
@@ -88,6 +120,9 @@ class Lexer {
                 case '∨':
                     this.advance();
                     return new Token(TokenType.OR, 'v', this.pos - 1);
+                case '⊻':
+                    this.advance();
+                    return new Token(TokenType.XOR, '⊻', this.pos - 1);
                 case '(':
                     this.advance();
                     return new Token(TokenType.LPAREN, '(', this.pos - 1);
@@ -136,6 +171,10 @@ class AtomNode extends ASTNode {
     constructor(name) { super(); this.name = name; }
     toString() { return this.name; }
 }
+class ConstantNode extends ASTNode {
+    constructor(value) { super(); this.value = value; }
+    toString() { return this.value === '1' ? '[Verdadeiro]' : '[Falso]'; }
+}
 class UnaryNode extends ASTNode {
     constructor(operator, operand) { super(); this.operator = operator; this.operand = operand; }
     toString() { return `(${this.operator} ${this.operand.toString()})`; }
@@ -175,11 +214,12 @@ class Parser {
     // Gramática:
     // Formula -> Iff
     // Iff     -> Implies ('<->' Implies)*
-    // Implies -> Or ('->' Or)*
+    // Implies -> Xor ('->' Xor)*
+    // Xor     -> Or ('⊻' Or)*
     // Or      -> And ('v' And)*
     // And     -> Not ('^' Not)*
     // Not     -> '~' Not | Primary
-    // Primary -> ATOM | '(' Formula ')'
+    // Primary -> ATOM | TRUE | FALSE | '(' Formula ')'
 
     parse() {
         const node = this.iff();
@@ -209,10 +249,20 @@ class Parser {
     }
 
     implies() {
-        let node = this.or();
+        let node = this.xor();
         while (this.currentToken.type === TokenType.IMPLIES) {
             const token = this.currentToken;
             this.eat(TokenType.IMPLIES);
+            node = new BinaryNode(node, token.value, this.xor());
+        }
+        return node;
+    }
+
+    xor() {
+        let node = this.or();
+        while (this.currentToken.type === TokenType.XOR) {
+            const token = this.currentToken;
+            this.eat(TokenType.XOR);
             node = new BinaryNode(node, token.value, this.or());
         }
         return node;
@@ -256,6 +306,9 @@ class Parser {
         if (token.type === TokenType.ATOM) {
             this.eat(TokenType.ATOM);
             return new AtomNode(token.value);
+        } else if (token.type === TokenType.TRUE || token.type === TokenType.FALSE) {
+            this.eat(token.type);
+            return new ConstantNode(token.value);
         } else if (token.type === TokenType.LPAREN) {
             this.eat(TokenType.LPAREN);
             const node = this.iff(); // Volta para o topo da precedência
@@ -263,10 +316,10 @@ class Parser {
             if (this.currentToken.type !== TokenType.RPAREN) {
                 let mensagem = '';
                 if (this.currentToken.type === TokenType.ATOM) {
-                    mensagem = `Erro Sintático: Falta um operador (∧, ∨, →, ↔) antes de '${this.currentToken.value}'. `;
+                    mensagem = `Erro Sintático: Falta um operador (∧, ∨, ⊻, →, ↔) antes de '${this.currentToken.value}'. `;
                     mensagem += `Exemplo correto: (P∧Q)∧${this.currentToken.value} ou (P∧Q)∨${this.currentToken.value}`;
                 } else if (this.currentToken.type === TokenType.NOT) {
-                    mensagem = `Erro Sintático: Falta um operador (∧, ∨, →, ↔) antes de '${this.currentToken.value}'. `;
+                    mensagem = `Erro Sintático: Falta um operador (∧, ∨, ⊻, →, ↔) antes de '${this.currentToken.value}'. `;
                     mensagem += `Exemplo correto: (P∧Q)∧${this.currentToken.value}P ou (P∧Q)∨${this.currentToken.value}P`;
                 } else {
                     mensagem = `Erro Sintático: Esperado ')' para fechar parêntese, mas encontrado ${this.currentToken.type} ('${this.currentToken.value}').`;
@@ -383,9 +436,23 @@ class TableauProver {
             return [[...context, node.left], [...context, node.right]];
         }
 
+        // XOR: A ⊻ B => Ramo1(A ^ ~B), Ramo2(~A ^ B)
+        if (node instanceof BinaryNode && node.operator === '⊻') {
+            const notRight = new UnaryNode('~', node.right);
+            const notLeft = new UnaryNode('~', node.left);
+            return [[...context, node.left, notRight], [...context, notLeft, node.right]];
+        }
+
         // Negação da Conjunção: ~(A ^ B) => Ramo1(~A), Ramo2(~B)
         if (node instanceof UnaryNode && node.operator === '~' && node.operand instanceof BinaryNode && node.operand.operator === '^') {
             return [[...context, new UnaryNode('~', node.operand.left)], [...context, new UnaryNode('~', node.operand.right)]];
+        }
+
+        // Negação do XOR: ~(A ⊻ B) => (~A ^ B) v (A ^ ~B) => Ramo1(~A ^ B), Ramo2(A ^ ~B)
+        if (node instanceof UnaryNode && node.operator === '~' && node.operand instanceof BinaryNode && node.operand.operator === '⊻') {
+            const notLeft = new UnaryNode('~', node.operand.left);
+            const notRight = new UnaryNode('~', node.operand.right);
+            return [[...context, notLeft, node.operand.right], [...context, node.operand.left, notRight]];
         }
 
         // Implicação: A -> B => Ramo1(~A), Ramo2(B)
@@ -440,6 +507,8 @@ class TruthTableGenerator {
     static getVariables(node, set = new Set()) {
         if (node instanceof AtomNode) {
             set.add(node.name);
+        } else if (node instanceof ConstantNode) {
+            // Constantes não têm variáveis
         } else if (node instanceof UnaryNode) {
             this.getVariables(node.operand, set);
         } else if (node instanceof BinaryNode) {
@@ -452,6 +521,8 @@ class TruthTableGenerator {
     static evaluate(node, env) {
         if (node instanceof AtomNode) {
             return env[node.name];
+        } else if (node instanceof ConstantNode) {
+            return node.value === '1';
         } else if (node instanceof UnaryNode) {
             if (node.operator === '~') return !this.evaluate(node.operand, env);
         } else if (node instanceof BinaryNode) {
@@ -460,6 +531,7 @@ class TruthTableGenerator {
             switch (node.operator) {
                 case '^': return l && r;
                 case 'v': return l || r;
+                case '⊻': return l !== r; // XOR: verdadeiro se diferentes
                 case '->': return !l || r;
                 case '<->': return l === r;
             }
